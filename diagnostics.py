@@ -756,7 +756,7 @@ def calculate_drift_diagnostics(all_collections, z_start = None, z_end = None,
 
 
 
-def make_cs_plots(mats, z_start, z_end, colormap='bwr', color_scale=10,
+def make_cs_plots(mats, z_start, z_end, colormap='bwr', color_scale=1,
                   sections_per_row=25, universal_color=False, fig_width=12,
                   fig_height=None, log=False, linthresh=1, *args, **kwargs):
     '''
