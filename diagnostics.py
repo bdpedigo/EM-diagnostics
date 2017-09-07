@@ -11,8 +11,20 @@ Created on Fri Jul 07 09:09:30 2017
 
 import numpy as np
 import renderapi as ren 
+import renderapi
 import warnings
 import bokeh.plotting as bkp
+
+from bokeh.models.sources import ColumnDataSource
+from bokeh.plotting import figure
+from bokeh.resources import INLINE
+from bokeh.embed import components
+import matplotlib as mpl
+from bokeh.io import output_file, show
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import SymLogNorm, Normalize
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 def get_tile_ids(tiles_list):
@@ -488,7 +500,7 @@ def calculate_area_perimeter_ratios(raw, montaged, z_start = None, z_end = None,
     
 def calculate_cross_sec_pm_residuals(fine_pm, z_start = None, z_end = None, num_cross_sections = 2, verbose = True, *args, **kwargs):
     '''Returns matrix (2d array) of residuals between sections.
-    
+        
     num_cross_sections -- default to 2; this specifies how many sections above
     to search for cross-section PMs. 
     verbose -- bool; whether or not to output progress for each Z section
@@ -556,7 +568,7 @@ def calculate_cross_sec_pm_residuals(fine_pm, z_start = None, z_end = None, num_
         if verbose:
             print 'Calculating cross section residuals for Z = %i' %(int(float(group_ids[z_idx + z_first_idx]))) 
         
-        p_tiles = ren.tilespec.get_tile_specs_from_z(fine_pm['sourceStack'], group_ids[z_idx +z_first_idx], render=r)
+        p_tiles = ren.tilespec.get_tile_specs_from_z(fine_pm['sourceStack'], group_ids[z_idx + z_first_idx], render=r)
         p_tiles_id = get_tile_ids((p_tiles))
         
         for step_idx in range(num_cross_sections):
@@ -608,3 +620,280 @@ def calculate_cross_sec_pm_residuals(fine_pm, z_start = None, z_end = None, num_
             simple_resid_out[z_idx, 0 + step_idx*2] = p_median_total_residuals
             simple_resid_out[z_idx, 1 + step_idx*2] = q_median_total_residuals
     return resid_mat, simple_resid_out
+
+# cross_section_pm_opts = {'verbose':verbose}
+# cross_section_residuals, simple_mat = diagnostics.calculate_cross_sec_pm_residuals(fine_pm, 2268, 3481, **cross_section_pm_opts)
+
+coll1 = {
+    "render": {
+        "owner":"gayathri",
+        "project":"EM_Phase1_Fine",
+        "host":"http://10.128.124.14",
+        "port":8999,
+        "client_scripts":"/data/nc-em2/gayathrim/Janelia_Pipeline/render/render-ws-java-client/src/main/scripts"
+    },
+    
+    "matchSource":"FineAlign_fullStack",
+    'sourceStack':"FineAlign_fusion1"
+}
+    
+coll2 = {
+    "render": {
+        "owner":"gayathri",
+        "project":"EM_Phase1_Fine",
+        "host":"http://10.128.124.14",
+        "port":8999,
+        "client_scripts":"/data/nc-em2/gayathrim/Janelia_Pipeline/render/render-ws-java-client/src/main/scripts"
+    },
+    
+    "matchSource":"FineAlign_fullStack",
+    'sourceStack':"FineAlign_fullstack"
+}
+
+def calculate_drift_diagnostics(all_collections, z_start = None, z_end = None,
+                                use_mont_pm=True, verbose=True, *args, **kwargs):
+    '''
+    Incorporates stats from cross-section residuals (and montage residuals, if
+    desired) and outputs summary stats comparing the change in point match
+    residuals between different render collections. 
+    
+    Parameters
+    ----------
+    all_collections : list 
+        Contains the render collections of interest, need at least 2 because 
+        this function compares residual quality between collections
+    z_start : int, optional
+        Will default to first element in collection
+    z_end : int, optional
+        Will default to last element in collection
+    use_mont_pm : bool, optional
+        Whether or not to fill the diagonal of the output matrix with the
+        output['medians'] from calculate_montage_pm_residuals()
+    verbose : bool, optional
+    
+    Returns
+    -------
+    output_by_collection : list
+        list of dictionaries of 
+    results_table : 2-D numpy array
+        columns correspond to render collections, same order as inputs
+        4 rows:
+            distance 1 mean 
+            distance 1 median
+            distance 2 mean
+            distance 2 median
+    ratios : list
+        list of 2-D numpy arrays (matrices) where each element in the matrix is 
+        an element-wise ratio. The ratio is always all_collections[0]/all_coll-
+        ections[i + 1], where i is the index in the list 'ratios'
+    '''
+    
+    output_by_collection = []
+    first = True
+    for i, collection in enumerate(all_collections):
+        cross_section_residuals, simple_mat = calculate_cross_sec_pm_residuals(
+                collection, z_start = z_start, z_end = z_end, verbose=verbose)
+        residuals_matrix = cross_section_residuals 
+        
+        if first:
+            dist_1_nonan = np.full((2 * (cross_section_residuals.shape[0] - 1)),
+                                   True, dtype=bool)
+            dist_2_nonan =  np.full((2 * (cross_section_residuals.shape[0] - 2)),
+                                    True, dtype=bool)
+            
+            dist_1_values = np.zeros((len(dist_1_nonan), len(all_collections),))
+            dist_2_values = np.zeros((len(dist_2_nonan), len(all_collections),))
+            z_start = z_start + 1
+            z_end = z_end + 1
+            first = False
+        
+        dist_1_resid = {}
+        dist_1_resid['values'] = np.concatenate((np.diagonal(cross_section_residuals,
+                    offset=1), np.diagonal(cross_section_residuals, offset=-1)))
+        dist_1_values[:,i] = dist_1_resid['values']
+        dist_1_resid['mean'] = np.mean(dist_1_resid['values']) 
+        dist_1_resid['median'] = np.median(dist_1_resid['values']) 
+        
+        dist_2_resid = {}
+        dist_2_resid['values'] = np.concatenate((np.diagonal(cross_section_residuals,
+                    offset=2), np.diagonal(cross_section_residuals, offset=-2)))
+        dist_2_values[:,i] = dist_2_resid['values']
+        dist_2_resid['mean'] = np.mean(dist_2_resid['values']) 
+        dist_2_resid['median'] = np.median(dist_2_resid['values'])
+        
+        if use_mont_pm:
+            mont_output = calculate_montage_pm_residuals(collection, z_start,
+                                                         z_end, verbose=verbose)
+            mont_median = mont_output['medians']
+            np.fill_diagonal(residuals_matrix, 0)
+            residuals_matrix = residuals_matrix + np.diag(mont_median)
+            
+        output_dict = {'dist_1_resid':dist_1_resid, 'dist_2_resid':dist_2_resid,
+                       'residuals_matrix':residuals_matrix}
+        output_by_collection.append(output_dict)
+        
+        dist_1_nonan = dist_1_nonan & ~np.isnan(dist_1_resid['values'])
+        dist_2_nonan = dist_2_nonan & ~np.isnan(dist_2_resid['values'])
+      
+        
+        
+    results_table = np.zeros((4, len(all_collections)))
+    results_table[0,:] = np.mean(dist_1_values[dist_1_nonan,:], axis = 0)
+    results_table[1,:] = np.median(dist_1_values[dist_1_nonan,:], axis = 0)
+    results_table[2,:] = np.mean(dist_2_values[dist_2_nonan,:], axis = 0)
+    results_table[3,:] = np.median(dist_2_values[dist_2_nonan,:], axis = 0)
+    
+    ratios = []
+    for i in range(1, len(all_collections)):
+        ratio_matrix = np.divide(output_by_collection[0]['residuals_matrix'],
+                                 output_by_collection[i]['residuals_matrix'])
+        #ratio_matrix = np.nan_to_num(ratio_matrix)
+        ratios.append(ratio_matrix)
+    
+    
+    return output_by_collection, results_table, ratios
+
+
+
+
+def make_cs_plots(mats, z_start, z_end, colormap='bwr', color_scale=1,
+                  sections_per_row=25, universal_color=False, fig_width=12,
+                  fig_height=None, log=False, linthresh=1, *args, **kwargs):
+    '''
+    Generates plots for a list of ratio matrices in 'mats'. 
+    
+    Parameters
+    ----------
+    mats : list
+        Each element in mats should be a square matrix. This list is output by
+        calculate_drift_diagnostics() as 'ratios'. The diagonals of each matrix
+        should contain point match residual ratios between different render 
+        collections.
+    z_start : int
+    z_end : int 
+    colormap : str, optional 
+        String value of a matplotlib colormap
+        https://matplotlib.org/users/colormaps.html
+        Prefer to use diverging colormaps to make symmetric around 0 (ratio of
+        1)
+        Some examples:
+            'bwr', 'coolwarm', 'RdBu', 'RdYlBu', 'Spectral', 'seismic'
+    color_scale : int, optional
+        Defaults to 1, where it will have no effect. Scales the normalization
+        of colorbar. Can be useful if you have large values. This value will be
+        multiplied by the max/min ratio to yield the new max color value. If
+        the matrix had a max of 80, and you used color_map=0.1, now the maximum
+        color value would be set to 8. Everything between 8-80 would have the
+        same color, but it would be easier to see values below 8. 
+    sections_per_row : int, optional 
+        Number of z-sections to display on the x axis before jumping down to 
+        the next row 
+    universal_color : bool, optional 
+        NOT TESTED. Whether or not to use the same colormap for the entire list
+        of 'mats' (True), or just have each mat scale its color independently
+        (False, default)
+    fig_width : int (or float?), optional
+    fig_height : int (or float?), optional 
+    log : bool, optional 
+        Whether or not to make the color scale logarithmic, if True, the param
+        'linthresh' will matter
+    linthresh : int or float, optional 
+        Only used if 'log' is True. Sets the lower and upper limits on the
+        linear region of the color scale (around 0).    
+    
+    Notes
+    -----
+        Will skip last row if number of z-sections is not divisible by
+        'sections_per_row'. 
+        
+        Haven't tested universal_color
+        Haven't tested >1 comparison (outputting more than one plot at once)
+    '''
+    
+            
+    dim_mat = mats[0].shape[0]
+    num_rows = int(dim_mat) / int(sections_per_row)
+    if num_rows == 0:
+        print('Warning: number of z-sections per row should not be greater than'
+              'number of z-sections')
+    
+    if dim_mat % sections_per_row != 0:
+        print('Warning: number of z-sections not divisible by number of'
+              'sections per row, last row will be skipped')
+    
+    if fig_height == None:
+        fig_height = float(num_rows * fig_width) / 5.0
+       
+    # haven't tested this
+    if universal_color:
+        color_max = np.nanmax(mats) * float(color_scale)
+        color_min = np.nanmin(mats) * float(color_scale)
+        sym_color = max(abs(color_max), abs(color_min))
+    
+    for mat in mats:
+        # turn matrix into a 5 x n array for plotting
+        d = np.diagonal(mat)
+        p1 = np.concatenate((np.diagonal(mat, offset=1), [1]))
+        p2 = np.concatenate((np.diagonal(mat, offset=2), [1, 1]))
+        m1 = np.concatenate(([1], np.diagonal(mat, offset=-1)))
+        m2 = np.concatenate(([1, 1], np.diagonal(mat, offset=-2)))
+        plot_mat = np.vstack((p2, p1, d, m1, m2))
+        # make ratios symmetric around 0
+        plot_mat = plot_mat - 1
+        
+        first_z = z_start
+        last_z = z_start + sections_per_row
+        
+        if not universal_color:
+            color_max = plot_mat.max()/float(color_scale)
+            color_min = plot_mat.min()/float(color_scale)
+            sym_color = max(abs(color_max), abs(color_min))
+        
+        fig, axes = plt.subplots(num_rows, 1, figsize=(fig_width, fig_height))
+
+        if type(axes) != np.ndarray:
+            axes = [axes]
+        if log:
+            norm=SymLogNorm(linthresh,vmin=-sym_color, vmax=sym_color)
+        else:
+            norm=Normalize(vmin=-sym_color, vmax=sym_color)
+            
+        for i, ax in enumerate(axes):
+            im = ax.imshow(plot_mat[:, (0+sections_per_row*i):(sections_per_row
+                                    + sections_per_row*i)],
+                                    extent=[first_z, last_z,-2,2],
+                                    cmap=colormap, 
+                                    norm=norm)
+
+            first_z = last_z + 1
+            last_z = first_z + sections_per_row
+        
+        fig.subplots_adjust(right=0.8)
+        cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])
+        fig.colorbar(im, cax=cbar_ax)
+        
+        
+z1 = 2268
+z2 = 2367
+
+output_test, results_table, ratios = calculate_drift_diagnostics([coll1, coll2], z1, z2)
+make_cs_plots(ratios, z1, z2)
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#r = ren.Render(**coll1['render'])
+#f = make_pointmatch_plot(r, coll1['sourceStack'], coll1['matchSource'], 2268, 2274)
+
